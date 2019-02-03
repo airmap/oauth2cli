@@ -2,9 +2,15 @@ package oauth2cli
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/pkg/browser"
@@ -35,7 +41,7 @@ type AuthCodeFlow struct {
 //
 // Note that this will change Config.RedirectURL to "http://localhost:port" if it is empty.
 //
-func (f *AuthCodeFlow) GetToken(ctx context.Context) (*oauth2.Token, error) {
+func (f *AuthCodeFlow) GetToken(ctx context.Context) (*TokenJSON, error) {
 	listener, err := newLocalhostListener(f.LocalServerPort)
 	if err != nil {
 		return nil, fmt.Errorf("Could not listen to port: %s", err)
@@ -48,11 +54,61 @@ func (f *AuthCodeFlow) GetToken(ctx context.Context) (*oauth2.Token, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Could not get an auth code: %s", err)
 	}
-	token, err := f.Config.Exchange(ctx, code)
+	// token, err := f.Config.Exchange(ctx, code)
+	token, err := exchangeWithBasicAuth(f.Config, code, f.Config.RedirectURL)
 	if err != nil {
 		return nil, fmt.Errorf("Could not exchange token: %s", err)
 	}
 	return token, nil
+}
+
+func exchangeWithBasicAuth(config oauth2.Config, code string, redirectURL string) (*TokenJSON, error) {
+	data := url.Values{}
+	data.Set("grant_type", "authorization_code")
+	data.Set("code", code)
+	data.Set("redirect_uri", redirectURL)
+
+	// urlStr := config.Endpoint.Token + "/token"
+
+	log.Printf("Token URL is ", config.Endpoint.TokenURL)
+
+	client := &http.Client{}
+	request, err := http.NewRequest("POST", config.Endpoint.TokenURL, strings.NewReader(data.Encode())) // URL-encoded payload
+	if err != nil {
+		return nil, err
+	}
+
+	clientIDSecret := []byte(config.ClientID + ":" + config.ClientSecret)
+	basicAuth := base64.StdEncoding.EncodeToString(clientIDSecret)
+
+	request.Header.Add("Authorization", "Basic "+basicAuth)
+	request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	r, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Body.Close()
+
+	fmt.Println(r.Status)
+
+	body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("oauth2: cannot fetch token: %v", err)
+	}
+	if code := r.StatusCode; code < 200 || code > 299 {
+		return nil, &RetrieveError{
+			Response: r,
+			Body:     body,
+		}
+	}
+
+	var tj TokenJSON
+	if err = json.Unmarshal(body, &tj); err != nil {
+		return nil, err
+	}
+	return &tj, nil
+
 }
 
 func (f *AuthCodeFlow) getCode(ctx context.Context, listener *localhostListener) (string, error) {
@@ -130,4 +186,34 @@ func (h *authCodeFlowHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	default:
 		http.Error(w, "Not Found", 404)
 	}
+}
+
+type RetrieveError struct {
+	Response *http.Response
+	Body     []byte
+}
+
+func (r *RetrieveError) Error() string {
+	return fmt.Sprintf("oauth2: cannot fetch token: %v\nResponse: %s", r.Response.Status, r.Body)
+}
+
+type TokenJSON struct {
+	AccessToken  string         `json:"access_token"`
+	TokenType    string         `json:"token_type"`
+	IdToken      string         `json:"id_token"`
+	RefreshToken string         `json:"refresh_token"`
+	ExpiresIn    expirationTime `json:"expires_in"` // at least PayPal returns string, while most return number
+	Expires      expirationTime `json:"expires"`    // broken Facebook spelling of expires_in
+}
+
+type expirationTime int32
+
+func (e *TokenJSON) expiry() (t time.Time) {
+	if v := e.ExpiresIn; v != 0 {
+		return time.Now().Add(time.Duration(v) * time.Second)
+	}
+	if v := e.Expires; v != 0 {
+		return time.Now().Add(time.Duration(v) * time.Second)
+	}
+	return
 }
