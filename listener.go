@@ -16,16 +16,12 @@ type localhostListener struct {
 // newLocalhostListener starts a TCP listener on localhost.
 // A random port is allocated if the port is 0.
 func newLocalhostListener(port int) (*localhostListener, error) {
-	l, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, fmt.Errorf("Could not listen to port %d", port)
 	}
-	p, err := extractPort(l.Addr())
-	if err != nil {
-		return nil, fmt.Errorf("Could not determine listening port: %s", err)
-	}
-	url := fmt.Sprintf("http://localhost:%d", p)
-	return &localhostListener{l, p, url}, nil
+	url := fmt.Sprintf("http://localhost:%d", port)
+	return &localhostListener{l, port, url}, nil
 }
 
 func extractPort(addr net.Addr) (int, error) {
