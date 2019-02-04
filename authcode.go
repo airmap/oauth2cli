@@ -68,10 +68,6 @@ func exchangeWithBasicAuth(config oauth2.Config, code string, redirectURL string
 	data.Set("code", code)
 	data.Set("redirect_uri", redirectURL)
 
-	// urlStr := config.Endpoint.Token + "/token"
-
-	log.Printf("Token URL is ", config.Endpoint.TokenURL)
-
 	client := &http.Client{}
 	request, err := http.NewRequest("POST", config.Endpoint.TokenURL, strings.NewReader(data.Encode())) // URL-encoded payload
 	if err != nil {
@@ -89,8 +85,6 @@ func exchangeWithBasicAuth(config oauth2.Config, code string, redirectURL string
 		return nil, err
 	}
 	defer r.Body.Close()
-
-	fmt.Println(r.Status)
 
 	body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
